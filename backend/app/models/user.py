@@ -7,6 +7,7 @@ from sqlalchemy import (
     DateTime,
 )
 from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 
 from app.db.database import Base
@@ -49,15 +50,12 @@ class User(Base):
         nullable=False
     )
 
-    # Customer -> False
-    # Approved Provider -> True
     is_provider = Column(
         Boolean,
         default=False,
         nullable=False
     )
 
-    # Only one admin account
     is_admin = Column(
         Boolean,
         default=False,
@@ -83,4 +81,10 @@ class User(Base):
         DateTime(timezone=True),
         server_default=func.now(),
         onupdate=func.now()
+    )
+
+    provider_profile = relationship(
+        "Provider",
+        back_populates="user",
+        uselist=False
     )
