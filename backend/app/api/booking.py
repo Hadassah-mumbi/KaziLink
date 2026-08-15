@@ -19,6 +19,9 @@ from app.schemas.booking import (
     BookingStatusUpdate,
 )
 
+from fastapi.responses import Response
+from app.services import document_service
+
 
 router = APIRouter(
     prefix="/bookings",
@@ -178,15 +181,20 @@ def create_booking(
     day_of_week = booking_data.booking_date.weekday()
 
     # --------------------------------------------------------
-    # Check provider working day
+    # Check provider working day and service category availability
     # --------------------------------------------------------
 
     availability = (
         db.query(ProviderAvailability)
         .filter(
             ProviderAvailability.provider_id == provider.id,
+            ProviderAvailability.category_id == category.id,
             ProviderAvailability.day_of_week == day_of_week,
-            ProviderAvailability.is_available.is_(True)
+            ProviderAvailability.is_available.is_(True),
+            ProviderAvailability.start_time.isnot(None),
+            ProviderAvailability.end_time.isnot(None),
+            ProviderAvailability.start_time <= booking_data.booking_time,
+            ProviderAvailability.end_time > booking_data.booking_time,
         )
         .first()
     )
@@ -194,34 +202,11 @@ def create_booking(
     if not availability:
         raise HTTPException(
             status_code=400,
-            detail="Provider is not available on the selected day."
+            detail=(
+                "Provider is not available for the selected service category, day, "
+                "or time."
+            )
         )
-
-    # --------------------------------------------------------
-    # Check working hours
-    # --------------------------------------------------------
-
-    if availability.start_time is not None:
-
-        if booking_data.booking_time < availability.start_time:
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    f"Booking time is before provider working hours. "
-                    f"Available from {availability.start_time}."
-                )
-            )
-
-    if availability.end_time is not None:
-
-        if booking_data.booking_time > availability.end_time:
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    f"Booking time is after provider working hours. "
-                    f"Available until {availability.end_time}."
-                )
-            )
 
     # --------------------------------------------------------
     # Check for conflicting booking
@@ -274,6 +259,9 @@ def create_booking(
             "id": booking.id,
             "customer_id": booking.customer_id,
             "provider_id": booking.provider_id,
+            "provider_name": f"{provider.user.first_name} {provider.user.last_name}" if provider.user else None,
+            "provider_phone": provider.user.phone if provider.user else None,
+            "provider_profile_picture": provider.profile_picture,
             "category_id": booking.category_id,
             "category_name": category.name,
             "booking_date": booking.booking_date,
@@ -356,7 +344,14 @@ def get_booking(
         "id": booking.id,
         "customer_id": booking.customer_id,
         "provider_id": booking.provider_id,
+        "provider_name": f"{provider.user.first_name} {provider.user.last_name}" if provider.user else None,
+        "provider_phone": provider.user.phone if provider.user else None,
+        "provider_profile_picture": provider.profile_picture,
+        "customer_name": f"{booking.customer.first_name} {booking.customer.last_name}" if booking.customer else None,
+        "customer_phone": booking.customer.phone if booking.customer else None,
+        "customer_profile_picture": booking.customer.profile_picture if booking.customer else None,
         "category_id": booking.category_id,
+        "category_name": booking.category.name if booking.category else None,
         "booking_date": booking.booking_date,
         "booking_time": booking.booking_time,
         "county": booking.county,
@@ -398,6 +393,9 @@ def get_my_customer_bookings(
             "id": booking.id,
             "customer_id": booking.customer_id,
             "provider_id": booking.provider_id,
+            "provider_name": f"{booking.provider.user.first_name} {booking.provider.user.last_name}" if booking.provider and booking.provider.user else None,
+            "provider_phone": booking.provider.user.phone if booking.provider and booking.provider.user else None,
+            "provider_profile_picture": booking.provider.profile_picture if booking.provider else None,
             "category_id": booking.category_id,
             "booking_date": booking.booking_date,
             "booking_time": booking.booking_time,
@@ -527,6 +525,9 @@ def get_my_provider_bookings(
             "id": booking.id,
             "customer_id": booking.customer_id,
             "provider_id": booking.provider_id,
+            "customer_name": f"{booking.customer.first_name} {booking.customer.last_name}" if booking.customer else None,
+            "customer_phone": booking.customer.phone if booking.customer else None,
+            "customer_profile_picture": booking.customer.profile_picture if booking.customer else None,
             "category_id": booking.category_id,
             "booking_date": booking.booking_date,
             "booking_time": booking.booking_time,
@@ -676,14 +677,93 @@ def accept_booking(
 
     db.commit()
     db.refresh(booking)
+    # Generate acceptance document and attempt to email customer
+    try:
+        customer = (
+            db.query(User)
+            .filter(User.id == booking.customer_id)
+            .first()
+        )
+
+        category_name = booking.category.name if booking.category else ""
+        provider = (
+            db.query(Provider)
+            .filter(Provider.id == booking.provider_id)
+            .first()
+        )
+
+        if customer and provider:
+            pdf_bytes = document_service.generate_booking_acceptance_pdf(booking, provider, customer, category_name)
+            email_error = None
+        else:
+            pdf_bytes = None
+            email_error = "customer or provider not available"
+    except Exception:
+        pdf_bytes = None
+        email_error = "error generating acceptance document"
 
     return {
         "message": "Booking accepted successfully.",
         "booking": {
             "id": booking.id,
             "status": booking.status
-        }
+        },
+        "acceptance_document_email": None,
+        "acceptance_document_url": f"/bookings/{booking.id}/acceptance_document"
     }
+
+
+@router.get("/{booking_id}/acceptance_document")
+def get_acceptance_document(
+    booking_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Return the booking acceptance document as an attachment.
+
+    Only the customer, the provider, or an admin can download it.
+    """
+    booking = (
+        db.query(Booking)
+        .filter(
+            Booking.id == booking_id
+        )
+        .first()
+    )
+
+    if not booking:
+        raise HTTPException(status_code=404, detail="Booking not found.")
+
+    provider = (
+        db.query(Provider)
+        .filter(Provider.id == booking.provider_id)
+        .first()
+    )
+
+    is_customer = booking.customer_id == current_user.id
+    is_provider = provider is not None and provider.user_id == current_user.id
+
+    if not (is_customer or is_provider or current_user.is_admin):
+        raise HTTPException(status_code=403, detail="You do not have permission to view this document.")
+
+    customer = (
+        db.query(User)
+        .filter(User.id == booking.customer_id)
+        .first()
+    )
+
+    category_name = booking.category.name if booking.category else ""
+
+    if not customer or not provider:
+        raise HTTPException(status_code=500, detail="Unable to build acceptance document.")
+
+    pdf_bytes = document_service.generate_booking_acceptance_pdf(booking, provider, customer, category_name)
+
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f"attachment; filename=booking_{booking.id}.pdf"}
+    )
 
 
 # ============================================================

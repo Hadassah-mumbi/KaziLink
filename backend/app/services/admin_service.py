@@ -55,10 +55,14 @@ def approve_provider(
 
     provider.approved = True
 
-    provider.user.is_provider = True
+    if provider.user:
+        provider.user.is_provider = True
+        db.add(provider.user)
 
     db.commit()
 
     db.refresh(provider)
+    if provider.user:
+        db.refresh(provider.user)
 
     return provider

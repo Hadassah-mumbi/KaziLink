@@ -201,3 +201,143 @@ def get_customer_reviews(
         )
         .all()
     )
+
+
+def create_provider_review(
+    db: Session,
+    provider: "Provider",
+    review_data: ReviewCreate
+):
+    """
+    Create or update a provider's review of a customer.
+
+    Rules:
+    - Booking must exist.
+    - Booking must belong to the provider.
+    - Booking must be completed.
+    - Customer must exist.
+    """
+
+    # --------------------------------------------------
+    # 1. Find booking
+    # --------------------------------------------------
+
+    booking = (
+        db.query(Booking)
+        .filter(
+            Booking.id == review_data.booking_id
+        )
+        .first()
+    )
+
+    if not booking:
+        raise ValueError(
+            "Booking not found."
+        )
+
+    # --------------------------------------------------
+    # 2. Make sure booking belongs to provider
+    # --------------------------------------------------
+
+    if booking.provider_id != provider.id:
+        raise ValueError(
+            "You can only review your own bookings."
+        )
+
+    # --------------------------------------------------
+    # 3. Booking must be completed
+    # --------------------------------------------------
+
+    if booking.status != "completed":
+        raise ValueError(
+            "You can only review a completed booking."
+        )
+
+    # --------------------------------------------------
+    # 4. Find or create review record
+    # --------------------------------------------------
+
+    review = (
+        db.query(Review)
+        .filter(
+            Review.booking_id == booking.id
+        )
+        .first()
+    )
+
+    if not review:
+        # Create new review record
+        review = Review(
+            booking_id=booking.id,
+            customer_id=booking.customer_id,
+            provider_id=provider.id,
+        )
+
+    # --------------------------------------------------
+    # 5. Update provider review fields
+    # --------------------------------------------------
+
+    review.provider_rating = review_data.rating
+    review.provider_comment = review_data.comment
+
+    db.add(review)
+    db.commit()
+    db.refresh(review)
+
+    # --------------------------------------------------
+    # 6. Recalculate customer rating
+    # --------------------------------------------------
+
+    customer = (
+        db.query(User)
+        .filter(
+            User.id == booking.customer_id
+        )
+        .first()
+    )
+
+    if customer:
+        provider_reviews = (
+            db.query(Review)
+            .filter(
+                Review.customer_id == customer.id,
+                Review.provider_rating.isnot(None)
+            )
+            .all()
+        )
+
+        total_provider_reviews = len(provider_reviews)
+
+        if total_provider_reviews > 0:
+            total_rating = sum(
+                item.provider_rating
+                for item in provider_reviews
+            )
+
+            # Store customer rating on the user (we could add this field to User model)
+            # For now, we'll just return it in the response
+        else:
+            total_provider_reviews = 0
+
+    return review
+
+
+def get_provider_reviews_for_customer(
+    db: Session,
+    customer_id: UUID
+):
+    """
+    Get all reviews that providers have given to a customer.
+    """
+
+    return (
+        db.query(Review)
+        .filter(
+            Review.customer_id == customer_id,
+            Review.provider_rating.isnot(None)
+        )
+        .order_by(
+            Review.created_at.desc()
+        )
+        .all()
+    )

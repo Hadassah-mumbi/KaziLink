@@ -3,6 +3,8 @@ from sqlalchemy.orm import Session
 
 from app.db.database import get_db
 from app.models.provider import Provider
+from app.models.category import Category
+from app.models.provider_category import ProviderCategory
 from app.models.provider_availability import ProviderAvailability
 from app.schemas.provider_availability import (
     ProviderAvailabilityCreate,
@@ -14,6 +16,13 @@ router = APIRouter(
     prefix="/providers",
     tags=["Provider Availability"]
 )
+
+
+def _availability_overlap(start_time, end_time, existing):
+    if not existing.is_available or existing.start_time is None or existing.end_time is None:
+        return False
+
+    return start_time < existing.end_time and existing.start_time < end_time
 
 
 # ============================================================
@@ -56,23 +65,65 @@ def add_provider_availability(
         )
 
     # --------------------------------------------------------
-    # Check whether availability already exists for this day
+    # Check category exists
     # --------------------------------------------------------
 
-    existing = (
-        db.query(ProviderAvailability)
+    category = (
+        db.query(Category)
+        .filter(Category.id == data.category_id)
+        .first()
+    )
+
+    if not category:
+        raise HTTPException(
+            status_code=404,
+            detail="Category not found."
+        )
+
+    # --------------------------------------------------------
+    # Check provider offers this category
+    # --------------------------------------------------------
+
+    provider_category = (
+        db.query(ProviderCategory)
         .filter(
-            ProviderAvailability.provider_id == provider_id,
-            ProviderAvailability.day_of_week == data.day_of_week
+            ProviderCategory.provider_id == provider.id,
+            ProviderCategory.category_id == category.id
         )
         .first()
     )
 
-    if existing:
+    if not provider_category:
         raise HTTPException(
             status_code=400,
-            detail="Availability for this day already exists."
+            detail="Provider does not offer this service category."
         )
+
+    # --------------------------------------------------------
+    # Prevent overlapping time slots for same provider/category/day
+    # --------------------------------------------------------
+
+    if data.is_available:
+        existing = (
+            db.query(ProviderAvailability)
+            .filter(
+                ProviderAvailability.provider_id == provider_id,
+                ProviderAvailability.category_id == data.category_id,
+                ProviderAvailability.day_of_week == data.day_of_week,
+                ProviderAvailability.is_available.is_(True)
+            )
+            .all()
+        )
+
+        for slot in existing:
+            if _availability_overlap(data.start_time, data.end_time, slot):
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        "This availability overlaps an existing time slot for the same "
+                        "service category and day."
+                    )
+                )
 
     # --------------------------------------------------------
     # Create availability
@@ -80,10 +131,11 @@ def add_provider_availability(
 
     availability = ProviderAvailability(
         provider_id=provider_id,
+        category_id=data.category_id,
         day_of_week=data.day_of_week,
         start_time=data.start_time,
         end_time=data.end_time,
-        is_available=True
+        is_available=data.is_available
     )
 
     db.add(availability)
@@ -95,6 +147,8 @@ def add_provider_availability(
         "availability": {
             "id": str(availability.id),
             "provider_id": str(availability.provider_id),
+            "category_id": str(availability.category_id),
+            "category_name": category.name,
             "day_of_week": availability.day_of_week,
             "start_time": availability.start_time,
             "end_time": availability.end_time,
@@ -142,7 +196,9 @@ def get_provider_availability(
             ProviderAvailability.provider_id == provider_id
         )
         .order_by(
-            ProviderAvailability.day_of_week
+            ProviderAvailability.day_of_week,
+            ProviderAvailability.category_id,
+            ProviderAvailability.start_time
         )
         .all()
     )
@@ -151,6 +207,8 @@ def get_provider_availability(
         {
             "id": str(item.id),
             "provider_id": str(item.provider_id),
+            "category_id": str(item.category_id),
+            "category_name": item.category.name if item.category else None,
             "day_of_week": item.day_of_week,
             "start_time": item.start_time,
             "end_time": item.end_time,
@@ -197,26 +255,65 @@ def update_provider_availability(
     # for this provider on the new day
     # --------------------------------------------------------
 
-    existing = (
-        db.query(ProviderAvailability)
+    category = (
+        db.query(Category)
+        .filter(Category.id == data.category_id)
+        .first()
+    )
+
+    if not category:
+        raise HTTPException(
+            status_code=404,
+            detail="Category not found."
+        )
+
+    provider_category = (
+        db.query(ProviderCategory)
         .filter(
-            ProviderAvailability.provider_id == availability.provider_id,
-            ProviderAvailability.day_of_week == data.day_of_week,
-            ProviderAvailability.id != availability_id
+            ProviderCategory.provider_id == availability.provider_id,
+            ProviderCategory.category_id == data.category_id
         )
         .first()
     )
 
-    if existing:
+    if not provider_category:
         raise HTTPException(
             status_code=400,
-            detail="Availability for this day already exists."
+            detail="Provider does not offer this service category."
         )
+
+    # --------------------------------------------------------
+    # Prevent overlapping time slots for same provider/category/day
+    # --------------------------------------------------------
+
+    if data.is_available:
+        existing = (
+            db.query(ProviderAvailability)
+            .filter(
+                ProviderAvailability.provider_id == availability.provider_id,
+                ProviderAvailability.category_id == data.category_id,
+                ProviderAvailability.day_of_week == data.day_of_week,
+                ProviderAvailability.id != availability_id,
+                ProviderAvailability.is_available.is_(True)
+            )
+            .all()
+        )
+
+        for slot in existing:
+            if _availability_overlap(data.start_time, data.end_time, slot):
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        "This availability overlaps an existing time slot for the same "
+                        "service category and day."
+                    )
+                )
 
     # --------------------------------------------------------
     # Update record
     # --------------------------------------------------------
 
+    availability.category_id = data.category_id
     availability.day_of_week = data.day_of_week
     availability.start_time = data.start_time
     availability.end_time = data.end_time
@@ -230,6 +327,8 @@ def update_provider_availability(
         "availability": {
             "id": str(availability.id),
             "provider_id": str(availability.provider_id),
+            "category_id": str(availability.category_id),
+            "category_name": category.name,
             "day_of_week": availability.day_of_week,
             "start_time": availability.start_time,
             "end_time": availability.end_time,

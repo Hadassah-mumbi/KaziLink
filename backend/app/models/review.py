@@ -50,10 +50,20 @@ class Review(Base):
 
     rating = Column(
         Integer,
-        nullable=False
+        nullable=True
     )
 
     comment = Column(
+        Text,
+        nullable=True
+    )
+
+    provider_rating = Column(
+        Integer,
+        nullable=True
+    )
+
+    provider_comment = Column(
         Text,
         nullable=True
     )

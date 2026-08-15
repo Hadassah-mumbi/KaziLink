@@ -1,4 +1,6 @@
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
 from app.db.database import engine, SessionLocal
 from app.db.base import Base
@@ -29,6 +31,29 @@ app = FastAPI(
     version="1.0.0",
     description="KaziLink Backend API"
 )
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+# Simple timing middleware to log request durations for debugging slow endpoints
+@app.middleware("http")
+async def log_request_time(request, call_next):
+    import time, logging
+    start = time.time()
+    response = await call_next(request)
+    duration = (time.time() - start) * 1000
+    logging.getLogger("uvicorn.access").info(f"{request.method} {request.url.path} completed_in={duration:.1f}ms status={response.status_code}")
+    return response
+
+
+# Serve uploaded files
+app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
 
 
 # ============================================================
