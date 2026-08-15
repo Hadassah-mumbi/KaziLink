@@ -61,7 +61,9 @@ def calculate_distance_km(
 def create_provider_profile(
     db: Session,
     user: User,
-    provider_data: ProviderCreate
+    provider_data: ProviderCreate,
+    national_id_document: str | None = None,
+    good_conduct_certificate: str | None = None,
 ):
     """
     Create a provider profile for a user.
@@ -93,6 +95,8 @@ def create_provider_profile(
         experience_years=provider_data.experience_years,
         hourly_rate=provider_data.hourly_rate,
         daily_rate=provider_data.daily_rate,
+        national_id_document=national_id_document,
+        good_conduct_certificate=good_conduct_certificate,
     )
 
     db.add(provider)

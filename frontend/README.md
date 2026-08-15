@@ -1,16 +1,45 @@
-# React + Vite
+# KaziLink Frontend
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+React + Vite frontend for the existing KaziLink FastAPI/PostgreSQL backend.
 
-Currently, two official plugins are available:
+## Run
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+1. Start FastAPI on `http://127.0.0.1:8000`.
+2. Open this `frontend` folder in VS Code.
+3. Run `npm install`.
+4. Run `npm run dev`.
+5. Open `http://localhost:5173`.
 
-## React Compiler
+The Vite development server proxies `/api/*` to the FastAPI backend, so local development does not require a CORS change.
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+## Existing backend endpoints used
 
-## Expanding the Oxlint configuration
+- `/auth/register/customer`
+- `/auth/login`
+- `/users/me`
+- `/categories`
+- `/providers/search`
+- `/providers/{id}`
+- `/providers/apply`
+- `/providers/me`
+- `/providers/me/services`
+- `/providers/me/location`
+- `/providers/me/service-radius`
+- `/providers/{id}/availability`
+- `/bookings`
+- `/bookings/customer/me`
+- `/bookings/provider/me`
+- `/reviews`
+- `/reviews/provider/{id}`
+- `/admin/providers`
+- `/admin/providers/pending`
+- `/admin/providers/{id}`
+- `/admin/users`
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and Oxlint's TypeScript related rules in your project.
+## Integration gaps found in the supplied backend
+
+1. Public provider responses do not include the provider user's first/last name. The UI therefore uses a neutral provider label until the backend exposes the name.
+2. There is no endpoint for uploading/updating national ID or good-conduct documents.
+3. There is no admin-wide bookings endpoint, so the admin UI does not invent one.
+4. Provider profile editing currently exposes location and service-radius updates, but not general edits to bio, rates, town or experience.
+5. The supplied availability endpoints are not protected by the current-user/provider dependency. This should be fixed before deployment.

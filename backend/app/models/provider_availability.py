@@ -6,6 +6,7 @@ from sqlalchemy import (
     Integer,
     Time,
     Boolean,
+    UniqueConstraint,
 )
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
@@ -15,6 +16,16 @@ from app.db.database import Base
 
 class ProviderAvailability(Base):
     __tablename__ = "provider_availability"
+    __table_args__ = (
+        UniqueConstraint(
+            "provider_id",
+            "category_id",
+            "day_of_week",
+            "start_time",
+            "end_time",
+            name="uq_provider_category_availability"
+        ),
+    )
 
     id = Column(
         UUID(as_uuid=True),
@@ -25,6 +36,12 @@ class ProviderAvailability(Base):
     provider_id = Column(
         UUID(as_uuid=True),
         ForeignKey("providers.id"),
+        nullable=False
+    )
+
+    category_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("categories.id"),
         nullable=False
     )
 
@@ -60,4 +77,8 @@ class ProviderAvailability(Base):
     provider = relationship(
         "Provider",
         back_populates="availability"
+    )
+
+    category = relationship(
+        "Category"
     )

@@ -89,6 +89,10 @@ class ProviderCategoryResponse(BaseModel):
 class ProviderResponse(BaseModel):
     id: UUID
 
+    name: str | None = None
+
+    phone: str | None = None
+
     bio: str
 
     county: str
@@ -141,6 +145,10 @@ class PublicProviderResponse(BaseModel):
     """
 
     id: UUID
+
+    name: str | None = None
+
+    phone: str | None = None
 
     bio: str
 

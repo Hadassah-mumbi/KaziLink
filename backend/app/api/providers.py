@@ -1,6 +1,9 @@
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+import os
+import uuid
+
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, File, UploadFile, Form
 from sqlalchemy.orm import Session
 
 from app.db.database import get_db
@@ -38,6 +41,33 @@ router = APIRouter(
 )
 
 
+async def save_upload_file(
+    request: Request,
+    upload_file: UploadFile | None
+) -> str | None:
+    if upload_file is None:
+        return None
+
+    uploads_dir = os.path.join(os.getcwd(), "uploads")
+    os.makedirs(uploads_dir, exist_ok=True)
+
+    filename = f"{uuid.uuid4().hex}{os.path.splitext(upload_file.filename)[1]}"
+    file_path = os.path.join(uploads_dir, filename)
+
+    contents = await upload_file.read()
+    try:
+        with open(file_path, "wb") as f:
+            f.write(contents)
+    except Exception:
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to save uploaded file."
+        )
+
+    base = str(request.base_url).rstrip("/")
+    return f"{base}/uploads/{filename}"
+
+
 # ============================================================
 # APPLY AS PROVIDER
 # ============================================================
@@ -46,16 +76,42 @@ router = APIRouter(
     "/apply",
     response_model=ProviderResponse
 )
-def apply_as_provider(
-    provider: ProviderCreate,
+async def apply_as_provider(
+    request: Request,
+    bio: str = Form(...),
+    county: str = Form(...),
+    town: str = Form(...),
+    latitude: float = Form(...),
+    longitude: float = Form(...),
+    experience_years: int = Form(...),
+    hourly_rate: float = Form(...),
+    daily_rate: float = Form(...),
+    national_id_document: UploadFile | None = File(None),
+    good_conduct_certificate: UploadFile | None = File(None),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
     try:
+        national_id_url = await save_upload_file(request, national_id_document)
+        good_conduct_url = await save_upload_file(request, good_conduct_certificate)
+
+        provider_data = ProviderCreate(
+            bio=bio,
+            county=county,
+            town=town,
+            latitude=latitude,
+            longitude=longitude,
+            experience_years=experience_years,
+            hourly_rate=hourly_rate,
+            daily_rate=daily_rate,
+        )
+
         return create_provider_profile(
             db,
             current_user,
-            provider
+            provider_data,
+            national_id_document=national_id_url,
+            good_conduct_certificate=good_conduct_url,
         )
 
     except ValueError as e:
@@ -231,6 +287,8 @@ def search_public_providers(
         results.append(
             {
                 "id": provider.id,
+                "name": f"{provider.user.first_name} {provider.user.last_name}" if provider.user else None,
+                "phone": provider.user.phone if provider.user else None,
                 "bio": provider.bio,
                 "county": provider.county,
                 "town": provider.town,
@@ -298,6 +356,8 @@ def get_public_provider_profile(
 
     return {
         "id": provider.id,
+        "name": f"{provider.user.first_name} {provider.user.last_name}" if provider.user else None,
+        "phone": provider.user.phone if provider.user else None,
         "bio": provider.bio,
         "county": provider.county,
         "town": provider.town,
@@ -311,6 +371,132 @@ def get_public_provider_profile(
         "total_reviews": provider.total_reviews,
         "completed_jobs": provider.completed_jobs,
         "profile_picture": provider.profile_picture,
+        "services": [
+            {
+                "category_id": item.category.id,
+                "name": item.category.name,
+                "description": item.category.description,
+            }
+            for item in categories
+        ],
+    }
+
+
+# ============================================================
+# UPDATE MY PROFILE
+# ============================================================
+
+@router.put(
+    "/me",
+    response_model=ProviderResponse
+)
+async def update_my_provider_profile(
+    request: Request,
+    bio: str | None = Form(None),
+    county: str | None = Form(None),
+    town: str | None = Form(None),
+    experience_years: int | None = Form(None),
+    hourly_rate: float | None = Form(None),
+    daily_rate: float | None = Form(None),
+    profile_picture: UploadFile | None = File(None),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    provider = (
+        db.query(Provider)
+        .filter(
+            Provider.user_id == current_user.id
+        )
+        .first()
+    )
+
+    if not provider:
+        raise HTTPException(
+            status_code=404,
+            detail="Provider profile not found."
+        )
+
+    changed = False
+
+    if bio is not None:
+        provider.bio = bio
+        changed = True
+
+    if county is not None:
+        provider.county = county
+        changed = True
+
+    if town is not None:
+        provider.town = town
+        changed = True
+
+    if experience_years is not None:
+        provider.experience_years = experience_years
+        changed = True
+
+    if hourly_rate is not None:
+        provider.hourly_rate = hourly_rate
+        changed = True
+
+    if daily_rate is not None:
+        provider.daily_rate = daily_rate
+        changed = True
+
+    if profile_picture is not None:
+        uploads_dir = os.path.join(os.getcwd(), "uploads")
+        os.makedirs(uploads_dir, exist_ok=True)
+
+        filename = f"{uuid.uuid4().hex}{os.path.splitext(profile_picture.filename)[1]}"
+        file_path = os.path.join(uploads_dir, filename)
+
+        contents = await profile_picture.read()
+        try:
+            with open(file_path, "wb") as f:
+                f.write(contents)
+        except Exception:
+            raise HTTPException(
+                status_code=500,
+                detail="Failed to save uploaded file."
+            )
+
+        base = str(request.base_url).rstrip("/")
+        picture_url = f"{base}/uploads/{filename}"
+        provider.profile_picture = picture_url
+        # Also update the user's profile picture for consistency across all pages
+        current_user.profile_picture = picture_url
+        changed = True
+
+    if changed:
+        db.add(provider)
+        db.add(current_user)
+        db.commit()
+        db.refresh(provider)
+        db.refresh(current_user)
+
+    categories = get_provider_categories(
+        db,
+        provider
+    )
+
+    return {
+        "id": provider.id,
+        "bio": provider.bio,
+        "county": provider.county,
+        "town": provider.town,
+        "latitude": provider.latitude,
+        "longitude": provider.longitude,
+        "service_radius_km": provider.service_radius_km,
+        "experience_years": provider.experience_years,
+        "hourly_rate": provider.hourly_rate,
+        "daily_rate": provider.daily_rate,
+        "approved": provider.approved,
+        "available": provider.available,
+        "average_rating": provider.average_rating,
+        "total_reviews": provider.total_reviews,
+        "completed_jobs": provider.completed_jobs,
+        "profile_picture": provider.profile_picture,
+        "national_id_document": provider.national_id_document,
+        "good_conduct_certificate": provider.good_conduct_certificate,
         "services": [
             {
                 "category_id": item.category.id,

@@ -27,9 +27,13 @@ class ReviewResponse(BaseModel):
 
     provider_id: UUID
 
-    rating: int
+    rating: int | None = None
 
-    comment: str | None
+    comment: str | None = None
+
+    provider_rating: int | None = None
+
+    provider_comment: str | None = None
 
     created_at: datetime | None = None
 
